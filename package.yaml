@@ -1,0 +1,62 @@
+name:                haskell-knn
+version:             0.1.0.0
+license:             BSD-3-Clause
+author:              "Student"
+maintainer:          "student@example.com"
+copyright:           "2026 Student"
+
+synopsis:            K-nearest neighbours machine learning algorithm
+description:         >
+  Implementation of the k-NN algorithm with training, evaluation,
+  and model serialisation. Supports Euclidean, Manhattan, Chebyshev,
+  and Minkowski distance metrics.
+
+extra-source-files:
+- README.md
+- CHANGELOG.md
+
+dependencies:
+- base >= 4.7 && < 5
+
+ghc-options:
+- -Wall
+- -Wcompat
+- -Widentities
+- -Wincomplete-record-updates
+- -Wincomplete-uni-patterns
+- -Wmissing-export-lists
+- -Wmissing-home-modules
+- -Wpartial-fields
+- -Wredundant-constraints
+
+library:
+  source-dirs: src
+  exposed-modules:
+  - Lib
+  - KNN.Types
+  - KNN.DataLoader
+  - KNN.Algorithm
+  - KNN.Metrics
+  - KNN.Serialization
+
+executables:
+  haskell-knn-exe:
+    main:                Main.hs
+    source-dirs:         app
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - haskell-knn
+
+tests:
+  haskell-knn-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - haskell-knn

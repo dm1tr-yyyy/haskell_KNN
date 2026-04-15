@@ -1,0 +1,67 @@
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.39.1.
+--
+-- see: https://github.com/sol/hpack
+
+name:           haskell-knn
+version:        0.1.0.0
+synopsis:       K-nearest neighbours machine learning algorithm
+description:    Implementation of the k-NN algorithm with training, evaluation, and model serialisation. Supports Euclidean, Manhattan, Chebyshev, and Minkowski distance metrics.
+author:         Student
+maintainer:     student@example.com
+copyright:      2026 Student
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+library
+  exposed-modules:
+      Lib
+      KNN.Types
+      KNN.DataLoader
+      KNN.Algorithm
+      KNN.Metrics
+      KNN.Serialization
+  other-modules:
+      Paths_haskell_knn
+  autogen-modules:
+      Paths_haskell_knn
+  hs-source-dirs:
+      src
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints
+  build-depends:
+      base >=4.7 && <5
+  default-language: Haskell2010
+
+executable haskell-knn-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_haskell_knn
+  autogen-modules:
+      Paths_haskell_knn
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , haskell-knn
+  default-language: Haskell2010
+
+test-suite haskell-knn-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_haskell_knn
+  autogen-modules:
+      Paths_haskell_knn
+  hs-source-dirs:
+      test
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , haskell-knn
+  default-language: Haskell2010
