@@ -40,52 +40,39 @@ trainModel cfg ts
 -- | Предсказать метку для одного вектора признаков с помощью модели.
 -- Для классификации используется голосование большинством,
 -- для регрессии — среднее значений соседей.
-predict :: Model -> Features -> Either String Label
+predict :: Model -> Features -> Label
 predict model features =
-  case findKNearest model features of
-    Left err        -> Left err
-    Right neighbors ->
-      let labels = map dpLabel neighbors
-      in Right $ case configTaskType (modelConfig model) of
-           Classification -> majorityVote labels
-           Regression     -> meanValue labels
+  let pairs = map (\(dp, d) -> (dpLabel dp, d)) (findKNearest model features)
+  in case configTaskType (modelConfig model) of
+       Classification -> majorityVote pairs
+       Regression     -> meanValue (map fst pairs)
 
--- | Предсказать метки для списка объектов.
--- Объекты могут содержать истинную метку (для оценки качества).
+-- | Предсказать метки для списка объектов с известными истинными метками.
 predictAll
   :: Model
-  -> [(Features, Maybe Label)]
-  -> [Either String PredictionResult]
+  -> [(Features, Label)]
+  -> [PredictionResult]
 predictAll model = map predictOne
   where
-    predictOne (fs, actual) =
-      case predict model fs of
-        Left err  -> Left err
-        Right lbl -> Right PredictionResult
-          { prFeatures  = fs
-          , prPredicted = lbl
-          , prActual    = actual
-          }
+    predictOne (fs, actual) = PredictionResult
+      { prFeatures  = fs
+      , prPredicted = predict model fs
+      , prActual    = actual
+      }
 
 -- | Найти k ближайших объектов обучающей выборки к запросу.
-findKNearest :: Model -> Features -> Either String [DataPoint]
-findKNearest model query
-  | length query /= expectedDim =
-      Left ( "Несовпадение размерности признаков: ожидалось "
-             ++ show expectedDim
-             ++ ", получено "
-             ++ show (length query) )
-  | otherwise =
-      Right . take k . sortBy (comparing dist) $ trainingSet
+-- Возвращает список пар (объект, расстояние), отсортированных по расстоянию.
+findKNearest :: Model -> Features -> [(DataPoint, Double)]
+findKNearest model query =
+  take k . sortBy (comparing snd) $ withDists
   where
     cfg         = modelConfig model
     trainingSet = modelTrainingSet model
     k           = configK cfg
     metric      = configMetric cfg
-    expectedDim = case trainingSet of
-                    []      -> 0
-                    (dp: _) -> length (dpFeatures dp)
-    dist dp     = computeDistance metric query (dpFeatures dp)
+    withDists   =
+      map (\dp -> (dp, computeDistance metric query (dpFeatures dp)))
+          trainingSet
 
 -- | Вычислить расстояние между двумя векторами признаков по заданной метрике.
 computeDistance :: DistanceMetric -> Features -> Features -> Double
@@ -112,22 +99,23 @@ chebyshevDist xs ys =
 
 -- | Среднее значение меток соседей (для задач регрессии).
 meanValue :: [Label] -> Label
-meanValue [] = 0.0
-meanValue ls = sum ls / fromIntegral (length ls)
+meanValue []  = 0.0
+meanValue ls  = sum ls / fromIntegral (length ls)
 
 -- | Классификация голосованием большинства среди соседей.
--- При равенстве голосов выбирается наименьшая метка (детерминированность).
-majorityVote :: [Label] -> Label
+-- При равенстве голосов побеждает класс с ближайшим соседом.
+majorityVote :: [(Label, Double)] -> Label
 majorityVote [] = 0.0
-majorityVote ls =
-  case sortBy cmp counts of
-    []              -> 0.0
-    ((winner, _):_) -> winner
+majorityVote pairs =
+  case sortBy cmp tied of
+    []          -> 0.0
+    ((lbl, _):_) -> lbl
   where
-    unique  = foldr insertUniq [] ls
-    counts  = map (\l -> (l, length (filter (== l) ls))) unique
-    cmp (l1, c1) (l2, c2) =
-      case compare c2 c1 of
-        EQ -> compare l1 l2
-        r  -> r
+    labels   = map fst pairs
+    unique   = foldr insertUniq [] labels
+    counts   = map (\l -> (l, length (filter (== l) labels))) unique
+    maxCount = maximum (map snd counts)
+    tied     = filter (\(_, c) -> c == maxCount) counts
+    minDist l = minimum [d | (lbl, d) <- pairs, lbl == l]
+    cmp (l1, _) (l2, _) = compare (minDist l1) (minDist l2)
     insertUniq x acc = if x `elem` acc then acc else x : acc

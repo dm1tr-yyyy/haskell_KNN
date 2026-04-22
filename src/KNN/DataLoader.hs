@@ -2,16 +2,29 @@
 
 -- | Загрузка и разбор наборов данных из текстовых файлов.
 --
--- Формат файла: числа, разделённые запятыми, по одному объекту на строку;
--- последний столбец — метка класса или целевое значение.
+-- Формат файла: числа, разделённые запятыми или пробелами, по одному объекту
+-- на строку; последний столбец — метка класса или целевое значение.
 module KNN.DataLoader
   ( loadDataset
   , parseDataset
+  , selectColumns
+  , LoadResult (..)
   , DatasetInfo (..)
   , datasetInfo
+  , checkDims
   ) where
 
+import Data.List (nub, sort)
+
 import KNN.Types (DataPoint (..), TrainingSet)
+
+-- | Результат загрузки набора данных.
+data LoadResult = LoadResult
+  { loadedPoints :: TrainingSet
+  -- ^ Успешно разобранные объекты
+  , loadWarnings :: [String]
+  -- ^ Предупреждения о пропущенных строках
+  } deriving (Show, Eq)
 
 -- | Сводная информация о загруженном наборе данных.
 data DatasetInfo = DatasetInfo
@@ -22,21 +35,51 @@ data DatasetInfo = DatasetInfo
   } deriving (Show, Eq)
 
 -- | Загрузить набор данных из файла.
--- Возвращает Left с сообщением об ошибке при неудаче.
-loadDataset :: FilePath -> IO (Either String TrainingSet)
+-- Одиночные ошибки строк — предупреждения; >50% плохих строк — фатально.
+loadDataset :: FilePath -> IO (Either String LoadResult)
 loadDataset path = do
   content <- readFile path
   return (parseDataset content)
 
 -- | Разобрать набор данных из текстового содержимого.
--- Возвращает Left с сообщением об ошибке, если хотя бы одна строка некорректна.
-parseDataset :: String -> Either String TrainingSet
+-- Строки с ошибками пропускаются; если их >50% — возвращает Left.
+parseDataset :: String -> Either String LoadResult
 parseDataset content =
-  mapM parseLine (filter (not . null) (lines content))
+  let rawLines  = filter (not . null) (lines content)
+      numbered  = zip [1 :: Int ..] rawLines
+      results   = map (\(n, l) -> (n, parseLine l)) numbered
+      good      = [dp  | (_, Right dp)  <- results]
+      bad       = [(n, e) | (n, Left e) <- results]
+      total     = length rawLines
+      badCount  = length bad
+      warns     = map formatWarn bad
+  in if total == 0
+       then Left "Файл не содержит данных"
+       else if badCount * 2 > total
+         then Left
+               ( "Слишком много некорректных строк: "
+                 ++ show badCount ++ " из " ++ show total )
+         else case checkDimConsistency good of
+                Left err -> Left err
+                Right () -> Right LoadResult
+                  { loadedPoints = good
+                  , loadWarnings = warns
+                  }
+  where
+    formatWarn (n, e) = "Строка " ++ show n ++ " пропущена: " ++ e
 
--- | Разобрать одну строку с числами (разделитель — пробел или запятая)
--- в объект DataPoint.
--- Возвращает Left с сообщением об ошибке, если строка содержит менее 2 значений.
+-- | Проверить что все объекты выборки имеют одинаковое число признаков.
+checkDimConsistency :: TrainingSet -> Either String ()
+checkDimConsistency []             = Right ()
+checkDimConsistency (first : rest) =
+  let dim     = length (dpFeatures first)
+      badRows = filter (\dp -> length (dpFeatures dp) /= dim) rest
+  in case badRows of
+       [] -> Right ()
+       _  -> Left ( "Несовпадение числа признаков в выборке: ожидалось "
+                    ++ show dim ++ " признаков в каждой строке" )
+
+-- | Разобрать одну строку в объект DataPoint.
 parseLine :: String -> Either String DataPoint
 parseLine line =
   case mapM readDouble (splitOnSep line) of
@@ -46,9 +89,7 @@ parseLine line =
       ("Строка содержит только одно значение, нужны признаки и метка: "
        ++ show line)
     Right vs  ->
-      let features = init vs
-          label    = last vs
-      in Right DataPoint { dpFeatures = features, dpLabel = label }
+      Right DataPoint { dpFeatures = init vs, dpLabel = last vs }
 
 -- | Разбить строку по пробелам или запятым.
 splitOnSep :: String -> [String]
@@ -60,19 +101,49 @@ splitOnSep s =
   where
     isSep c = c == ',' || c == ' ' || c == '\t'
 
--- | Безопасный разбор вещественного числа; возвращает Left при ошибке.
+-- | Безопасный разбор вещественного числа.
 readDouble :: String -> Either String Double
 readDouble s =
   case reads s of
     [(v, "")] -> Right v
     _         -> Left ("Невозможно разобрать число: " ++ show s)
 
+-- | Оставить только указанные столбцы признаков (индексы 0-based, порядок не важен).
+-- Фатальная ошибка если индекс выходит за границы.
+selectColumns :: [Int] -> TrainingSet -> Either String TrainingSet
+selectColumns cols ts =
+  case ts of
+    [] -> Right []
+    (first : _) ->
+      let dim        = length (dpFeatures first)
+          cols'      = sort (nub cols)
+          outOfRange = filter (\c -> c < 0 || c >= dim) cols'
+      in case outOfRange of
+           (c : _) -> Left
+             ( "Индекс столбца " ++ show c
+               ++ " выходит за границы (доступно " ++ show dim
+               ++ " признаков, индексы 0–" ++ show (dim - 1) ++ ")" )
+           [] -> Right (map (pickCols cols') ts)
+  where
+    pickCols cols' dp =
+      dp { dpFeatures = [dpFeatures dp !! c | c <- cols'] }
+
+-- | Проверить совместимость числа признаков между двумя выборками.
+checkDims :: DatasetInfo -> DatasetInfo -> Either String ()
+checkDims train test
+  | infoNumFeatures train == infoNumFeatures test = Right ()
+  | otherwise = Left
+      ( "Несовпадение числа признаков: обучающая выборка имеет "
+        ++ show (infoNumFeatures train)
+        ++ " признаков, тестовая — "
+        ++ show (infoNumFeatures test) )
+
 -- | Вычислить сводную информацию о наборе данных.
 datasetInfo :: TrainingSet -> DatasetInfo
-datasetInfo [] =
+datasetInfo []        =
   DatasetInfo { infoNumPoints = 0, infoNumFeatures = 0 }
 datasetInfo (x : xs) =
   DatasetInfo
-    { infoNumPoints   = length $ x : xs
+    { infoNumPoints   = 1 + length xs
     , infoNumFeatures = length (dpFeatures x)
     }

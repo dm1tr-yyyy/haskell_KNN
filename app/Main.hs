@@ -4,79 +4,100 @@
 -- k-NN и вывод читаемого отчёта.
 --
 -- Использование:
---   stack run -- <обучающий-файл> <тестовый-файл> <файл-модели> [k] [метрика] [задача]
+--   stack run -- <обучение> <тест> <модель> [k] [метрика] [задача] [столбцы]
 --
--- Допустимые значения метрики: Euclidean | Manhattan | Chebyshev
--- Допустимые значения задачи : Classification | Regression
--- По умолчанию: k=3, метрика=Euclidean, задача=Classification
+-- Допустимые значения метрики : Euclidean | Manhattan | Chebyshev
+-- Допустимые значения задачи  : Classification | Regression
+-- Формат столбцов             : 0,1,3  (индексы 0-based через запятую)
+-- По умолчанию: k=3, метрика=Euclidean, задача=Classification, все столбцы
 module Main (main) where
 
 import System.Environment (getArgs)
-import System.Exit        (exitFailure)
 
 import Lib
 
--- Точка входа в программу.
+-- | Точка входа в программу.
 main :: IO ()
 main = do
   args <- getArgs
   case args of
     (trainFile : testFile : modelFile : rest) ->
       runPipeline trainFile testFile modelFile rest
-    _ -> do
+    _ ->
       putStrLn usage
-      exitFailure
 
--- Полный pipeline k-NN: загрузка данных, обучение, предсказание,
--- оценка качества и сохранение модели.
+-- | Полный конвейер k-NN: загрузка, выбор столбцов, обучение, предсказание, отчёт.
 runPipeline
-  :: FilePath  -- Файл с обучающей выборкой
-  -> FilePath  -- Файл с тестовой выборкой (или данными для предсказания)
-  -> FilePath  -- Файл для сохранения/загрузки модели
-  -> [String]  -- Необязательные аргументы: [k] [метрика] [задача]
-  -> IO ()
+  :: FilePath -> FilePath -> FilePath -> [String] -> IO ()
 runPipeline trainFile testFile modelFile extraArgs = do
   let cfg = parseConfig extraArgs
+  mTrain <- loadStep trainFile
+  mTest  <- loadStep testFile
+  case (mTrain, mTest) of
+    (Just trainSet, Just testSet) ->
+      applyColumnsStep cfg trainSet testSet modelFile
+    _ -> return ()
 
-  -- Загрузка обучающей выборки
-  trainResult <- loadDataset trainFile
-  trainSet <- exitOnError trainResult
+-- | Загрузить один файл с выборкой; вернуть Nothing при фатальной ошибке.
+loadStep :: FilePath -> IO (Maybe TrainingSet)
+loadStep path = do
+  result <- loadDataset path
+  case result of
+    Left err -> putStrLn ("Ошибка: " ++ err) >> return Nothing
+    Right lr -> do
+      mapM_ (\w -> putStrLn ("Предупреждение: " ++ w)) (loadWarnings lr)
+      return (Just (loadedPoints lr))
 
-  -- Загрузка тестовой выборки
-  testResult <- loadDataset testFile
-  testSet <- exitOnError testResult
+-- | Применить выбор столбцов к обеим выборкам.
+applyColumnsStep
+  :: Config -> TrainingSet -> TrainingSet -> FilePath -> IO ()
+applyColumnsStep cfg trainSet testSet modelFile =
+  case configColumns cfg of
+    Nothing   -> runWithSets cfg trainSet testSet modelFile
+    Just cols ->
+      case (selectColumns cols trainSet, selectColumns cols testSet) of
+        (Left err, _) -> putStrLn ("Ошибка: " ++ err)
+        (_, Left err) -> putStrLn ("Ошибка: " ++ err)
+        (Right tr, Right te) -> runWithSets cfg tr te modelFile
 
-  -- Информация о данных
-  let info = datasetInfo trainSet
+-- | Продолжить конвейер после выбора столбцов.
+runWithSets
+  :: Config -> TrainingSet -> TrainingSet -> FilePath -> IO ()
+runWithSets cfg trainSet testSet modelFile =
+  case checkDims trainInfo testInfo of
+    Left err -> putStrLn ("Ошибка: " ++ err)
+    Right () -> runWithDims cfg trainSet testSet modelFile
+  where
+    trainInfo = datasetInfo trainSet
+    testInfo  = datasetInfo testSet
+
+-- | Продолжить конвейер после проверки размерностей.
+runWithDims
+  :: Config -> TrainingSet -> TrainingSet -> FilePath -> IO ()
+runWithDims cfg trainSet testSet modelFile = do
+  let trainInfo = datasetInfo trainSet
+      testInfo  = datasetInfo testSet
   putStrLn ("Обучающая выборка: "
-            ++ show (infoNumPoints info) ++ " объектов, "
-            ++ show (infoNumFeatures info) ++ " признаков")
+            ++ show (infoNumPoints trainInfo) ++ " объектов, "
+            ++ show (infoNumFeatures trainInfo) ++ " признаков")
   putStrLn ("Тестовая выборка : "
-            ++ show (length testSet) ++ " объектов")
+            ++ show (infoNumPoints testInfo) ++ " объектов")
   putStrLn ("Конфигурация     : " ++ show cfg)
+  case trainModel cfg trainSet of
+    Left err    -> putStrLn ("Ошибка: " ++ err)
+    Right model -> runWithModel model testSet modelFile
 
-  -- Обучение модели
-  model <- exitOnError (trainModel cfg trainSet)
-
-  -- Сохранение модели
+-- | Продолжить конвейер после обучения модели.
+runWithModel :: Model -> TrainingSet -> FilePath -> IO ()
+runWithModel model testSet modelFile = do
   saveResult <- saveModel modelFile model
   case saveResult of
-    Left err ->
-      putStrLn ("Предупреждение: не удалось сохранить модель: " ++ err)
-    Right _  ->
-      putStrLn ("Модель сохранена в файл: " ++ modelFile)
-
-  -- Предсказание на тестовой выборке
-  let queries  =
-        map (\dp -> (dpFeatures dp, Just (dpLabel dp))) testSet
-      rawPreds = predictAll model queries
-  preds <- mapM exitOnError rawPreds
-
-  -- Вывод предсказаний
+    Left err -> putStrLn ("Предупреждение: не удалось сохранить модель: " ++ err)
+    Right _  -> putStrLn ("Модель сохранена в файл: " ++ modelFile)
+  let queries = map (\dp -> (dpFeatures dp, dpLabel dp)) testSet
+      preds   = predictAll model queries
   putStrLn "\n=== Предсказания ==="
   mapM_ printPrediction preds
-
-  -- Оценка качества
   putStr (formatReport preds)
 
 -- | Вывести одну строку с результатом предсказания.
@@ -84,18 +105,17 @@ printPrediction :: PredictionResult -> IO ()
 printPrediction pr =
   putStrLn
     ( "предсказано=" ++ show (prPredicted pr)
-      ++ case prActual pr of
-           Nothing -> ""
-           Just a  -> "  истинное=" ++ show a )
+      ++ "  истинное=" ++ show (prActual pr) )
 
 -- | Разобрать необязательные аргументы в структуру Config.
--- По умолчанию: k=3, метрика=Euclidean, задача=Classification.
+-- По умолчанию: k=3, метрика=Euclidean, задача=Classification, все столбцы.
 parseConfig :: [String] -> Config
 parseConfig args =
   Config
     { configK        = k
     , configMetric   = metric
     , configTaskType = taskType
+    , configColumns  = cols
     }
   where
     k = case args of
@@ -105,11 +125,14 @@ parseConfig args =
               _                  -> defaultK
           [] -> defaultK
     metric = case args of
-               (_ : metricStr : _) -> parseMetric metricStr
-               _                   -> Euclidean
+               (_ : s : _) -> parseMetric s
+               _           -> Euclidean
     taskType = case args of
-                 (_ : _ : taskStr : _) -> parseTaskType taskStr
-                 _                     -> Classification
+                 (_ : _ : s : _) -> parseTaskType s
+                 _               -> Classification
+    cols = case args of
+             (_ : _ : _ : s : _) -> parseColumns s
+             _                   -> Nothing
     defaultK = 3
 
 -- | Разобрать название метрики из строки.
@@ -128,24 +151,34 @@ parseTaskType s =
     "Regression" -> Regression
     _            -> Classification
 
--- | Вывести сообщение об ошибке и завершить программу при Left;
--- вернуть значение при Right.
-exitOnError :: Either String a -> IO a
-exitOnError (Right v)  = return v
-exitOnError (Left err) = do
-  putStrLn ("Ошибка: " ++ err)
-  exitFailure
+-- | Разобрать список столбцов вида "0,1,3" в [Int].
+-- Возвращает Nothing если строка не является списком неотрицательных чисел.
+parseColumns :: String -> Maybe [Int]
+parseColumns s =
+  let parts = splitOnComma s
+  in mapM readNonNeg parts
+  where
+    splitOnComma str =
+      case break (== ',') str of
+        (tok, [])       -> [tok]
+        (tok, _ : rest) -> tok : splitOnComma rest
+    readNonNeg str =
+      case reads str of
+        [(n, "")] | n >= 0 -> Just n
+        _                  -> Nothing
 
 -- | Строка справки по использованию программы.
 usage :: String
 usage = unlines
-  [ "Использование: stack run -- <обучение> <тест> <модель> [k] [метрика] [задача]"
+  [ "Использование: stack run -- <обучение> <тест> <модель> [k] [метрика] [задача] [столбцы]"
   , "  обучение — путь к файлу с обучающей выборкой"
   , "  тест     — путь к файлу с тестовой выборкой"
   , "  модель   — путь для сохранения/загрузки обученной модели"
   , "  k        — количество соседей (по умолчанию: 3)"
   , "  метрика  — Euclidean | Manhattan | Chebyshev (по умолчанию: Euclidean)"
   , "  задача   — Classification | Regression (по умолчанию: Classification)"
+  , "  столбцы  — индексы признаков через запятую, например 0,1,3"
+  , "             (по умолчанию: все столбцы; последний столбец — метка)"
   , ""
   , "Формат файла данных: числа через запятую или пробел, последний столбец — метка."
   ]

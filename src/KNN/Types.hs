@@ -55,6 +55,9 @@ data Config = Config
   -- ^ Используемая метрика расстояния
   , configTaskType :: TaskType
   -- ^ Тип задачи: классификация или регрессия
+  , configColumns  :: Maybe [Int]
+  -- ^ Индексы используемых столбцов признаков (0-based);
+  -- Nothing — использовать все столбцы
   } deriving (Show, Read, Eq)
 
 -- | Обученная модель: настройки + сохранённая обучающая выборка.
@@ -71,6 +74,6 @@ data PredictionResult = PredictionResult
   -- ^ Вектор признаков классифицированного объекта
   , prPredicted :: Label
   -- ^ Метка, предсказанная моделью
-  , prActual    :: Maybe Label
-  -- ^ Истинная метка, если известна
+  , prActual    :: Label
+  -- ^ Истинная метка
   } deriving (Show, Eq)
