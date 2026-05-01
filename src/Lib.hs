@@ -7,6 +7,7 @@ module Lib
   , module KNN.Algorithm
   , module KNN.Metrics
   , module KNN.Serialization
+  , module KNN.Parse
   ) where
 
 import KNN.Types
@@ -14,3 +15,4 @@ import KNN.DataLoader
 import KNN.Algorithm
 import KNN.Metrics
 import KNN.Serialization
+import KNN.Parse
